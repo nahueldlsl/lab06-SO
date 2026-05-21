@@ -1,0 +1,12 @@
+services:
+  dummy-a:
+    image: ghcr.io/nahueldlsl/lab06-so-dummy-a:latest
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+  dummy-b:
+    image: ghcr.io/nahueldlsl/lab06-so-dummy-b:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

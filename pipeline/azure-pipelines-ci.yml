@@ -12,43 +12,24 @@ pr:
 pool:
   vmImage: ubuntu-latest
 
+variables:
+  REGISTRY: ghcr.io
+  IMAGE_A: ghcr.io/nahueldlsl/lab06-so-dummy-a
+  IMAGE_B: ghcr.io/nahueldlsl/lab06-so-dummy-b
+
 stages:
-  # ── Stage 1: Build & Test ──────────────────────────────────────────────────
-  - stage: BuildAndTest
-    displayName: Build & Test
+  # ── Stage 1: Test ──────────────────────────────────────────────────────────
+  - stage: Test
+    displayName: Lint & Test
     jobs:
-      # ── Dummy A ─────────────────────────────────────────────────────────────
-      - job: DummyA
-        displayName: Lint & Package — Dummy A (Static)
-        steps:
-          - checkout: self
-
-          - script: |
-              sudo apt-get install -y tidy
-              tidy -errors -quiet app/dummy-a/index.html || true
-            displayName: Validate HTML
-
-          - script: |
-              tar -czf $(Build.ArtifactStagingDirectory)/dummy-a.tar.gz \
-                  -C app/dummy-a .
-            displayName: Package dummy-a
-
-          - task: PublishBuildArtifacts@1
-            inputs:
-              pathToPublish: $(Build.ArtifactStagingDirectory)
-              artifactName: dummy-a
-            displayName: Publish dummy-a artifact
-
-      # ── Dummy B ─────────────────────────────────────────────────────────────
-      - job: DummyB
-        displayName: Test & Package — Dummy B (Flask API)
+      - job: TestDummyB
+        displayName: Lint & Test — Dummy B (Flask API)
         steps:
           - checkout: self
 
           - task: UsePythonVersion@0
             inputs:
               versionSpec: "3.12"
-            displayName: Use Python 3.12
 
           - script: |
               cd app/dummy-b
@@ -56,8 +37,7 @@ stages:
               pip install flake8
             displayName: Install dependencies
 
-          - script: |
-              flake8 app/dummy-b --max-line-length=100 --statistics
+          - script: flake8 app/dummy-b --max-line-length=100 --statistics
             displayName: Lint with flake8
 
           - script: |
@@ -73,13 +53,33 @@ stages:
             condition: always()
             displayName: Publish test results
 
-          - script: |
-              tar -czf $(Build.ArtifactStagingDirectory)/dummy-b.tar.gz \
-                  -C app/dummy-b .
-            displayName: Package dummy-b
+  # ── Stage 2: Build & Push (solo en main) ──────────────────────────────────
+  - stage: BuildPush
+    displayName: Build & Push Docker Images
+    dependsOn: Test
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: BuildAndPush
+        displayName: Build & push to ghcr.io
+        steps:
+          - checkout: self
 
-          - task: PublishBuildArtifacts@1
-            inputs:
-              pathToPublish: $(Build.ArtifactStagingDirectory)
-              artifactName: dummy-b
-            displayName: Publish dummy-b artifact
+          - script: |
+              echo "$(GHCR_TOKEN)" | docker login ghcr.io -u "$(GHCR_USER)" --password-stdin
+            displayName: Log in to ghcr.io
+
+          - script: |
+              docker build -t $(IMAGE_A):latest \
+                           -t $(IMAGE_A):$(Build.SourceVersion) \
+                           app/dummy-a
+              docker push $(IMAGE_A):latest
+              docker push $(IMAGE_A):$(Build.SourceVersion)
+            displayName: Build & push dummy-a
+
+          - script: |
+              docker build -t $(IMAGE_B):latest \
+                           -t $(IMAGE_B):$(Build.SourceVersion) \
+                           app/dummy-b
+              docker push $(IMAGE_B):latest
+              docker push $(IMAGE_B):$(Build.SourceVersion)
+            displayName: Build & push dummy-b

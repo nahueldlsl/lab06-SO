@@ -1,4 +1,4 @@
-trigger: none  # triggered manually or by release pipeline
+trigger: none
 
 resources:
   pipelines:
@@ -13,81 +13,42 @@ pool:
   vmImage: ubuntu-latest
 
 stages:
-  # ── Stage: Deploy ──────────────────────────────────────────────────────────
   - stage: Deploy
-    displayName: Deploy to Azure VM
+    displayName: Deploy to Server
     jobs:
-      - deployment: DeployToVM
-        displayName: Deploy Dummy A & B
+      - deployment: DeployToServer
+        displayName: Docker Compose deploy via SSH
         environment: production
         strategy:
           runOnce:
             deploy:
               steps:
-                # ── Download artifacts ───────────────────────────────────────
-                - task: DownloadPipelineArtifact@2
-                  inputs:
-                    buildType: specific
-                    project: $(System.TeamProjectId)
-                    definition: $(resources.pipeline.ci.pipelineID)
-                    specificBuildWithTriggering: true
-                    artifactName: dummy-a
-                    targetPath: $(Pipeline.Workspace)/artifacts
-                  displayName: Download dummy-a artifact
+                - checkout: self
 
-                - task: DownloadPipelineArtifact@2
-                  inputs:
-                    buildType: specific
-                    project: $(System.TeamProjectId)
-                    definition: $(resources.pipeline.ci.pipelineID)
-                    specificBuildWithTriggering: true
-                    artifactName: dummy-b
-                    targetPath: $(Pipeline.Workspace)/artifacts
-                  displayName: Download dummy-b artifact
-
-                # ── Configure SSH ────────────────────────────────────────────
                 - task: InstallSSHKey@0
                   inputs:
-                    knownHostsEntry: $(AZURE_VM_KNOWN_HOSTS)
-                    sshPublicKey: $(AZURE_VM_SSH_PUBLIC_KEY)
+                    knownHostsEntry: $(SSH_KNOWN_HOSTS)
+                    sshPublicKey: $(SSH_PUBLIC_KEY)
                     sshKeySecureFile: deploy_key.pem
                   displayName: Install SSH key
 
-                # ── Copy files to VM ─────────────────────────────────────────
                 - script: |
                     scp -i $(Agent.TempDirectory)/deploy_key.pem \
-                        $(Pipeline.Workspace)/artifacts/dummy-a.tar.gz \
-                        $(Pipeline.Workspace)/artifacts/dummy-b.tar.gz \
+                        docker-compose.yml \
                         scripts/deploy.sh \
-                        $(AZURE_VM_USER)@$(AZURE_VM_IP):/tmp/
-                  displayName: Copy artifacts to VM
+                        $(SSH_USER)@$(SSH_HOST):/opt/lab06/
+                  displayName: Copy files to server
 
-                # ── Deploy Dummy A ───────────────────────────────────────────
                 - script: |
                     ssh -i $(Agent.TempDirectory)/deploy_key.pem \
-                        $(AZURE_VM_USER)@$(AZURE_VM_IP) \
-                        "bash /tmp/deploy.sh dummy-a /tmp/dummy-a.tar.gz"
-                  displayName: Deploy Dummy A
-
-                # ── Deploy Dummy B ───────────────────────────────────────────
-                - script: |
-                    ssh -i $(Agent.TempDirectory)/deploy_key.pem \
-                        $(AZURE_VM_USER)@$(AZURE_VM_IP) \
-                        "bash /tmp/deploy.sh dummy-b /tmp/dummy-b.tar.gz"
-                  displayName: Deploy Dummy B
-
-                # ── Smoke tests ──────────────────────────────────────────────
-                - script: |
-                    curl -sf http://$(AZURE_VM_IP)/ \
-                      | grep -q "Hola Mundo DevOps" \
-                      && echo "Dummy A: PASS" \
-                      || { echo "Dummy A: FAIL"; exit 1; }
-                  displayName: Smoke test — Dummy A
+                        $(SSH_USER)@$(SSH_HOST) \
+                        "GHCR_TOKEN='$(GHCR_TOKEN)' GHCR_USER='$(GHCR_USER)' bash /opt/lab06/deploy.sh"
+                  displayName: Deploy
 
                 - script: |
-                    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
-                      http://$(AZURE_VM_IP):8080/health)
+                    curl -sf http://$(SSH_HOST)/ | grep -q "Hola Mundo DevOps" \
+                      && echo "dummy-a: PASS" || { echo "dummy-a: FAIL"; exit 1; }
+                    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://$(SSH_HOST):8080/health)
                     [ "$STATUS" = "200" ] \
-                      && echo "Dummy B: PASS (HTTP $STATUS)" \
-                      || { echo "Dummy B: FAIL (HTTP $STATUS)"; exit 1; }
-                  displayName: Smoke test — Dummy B
+                      && echo "dummy-b: PASS" || { echo "dummy-b: FAIL"; exit 1; }
+                  displayName: Smoke tests

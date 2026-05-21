@@ -1,14 +1,14 @@
-name: CD — Deploy to Azure VM
+name: CD — Deploy to Server
 
 on:
   workflow_run:
-    workflows: ["CI — Build & Test"]
+    workflows: ["CI — Test & Build Docker Images"]
     types: [completed]
     branches: ["main"]
 
 jobs:
   deploy:
-    name: Deploy to Ubuntu VM
+    name: Deploy via SSH
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     environment: production
@@ -16,56 +16,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Download artifacts produced by CI ─────────────────────────────────
-      - name: Download dummy-a artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dummy-a
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-
-      - name: Download dummy-b artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dummy-b
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-
-      # ── Set up SSH key ─────────────────────────────────────────────────────
+      # ── Configurar SSH ─────────────────────────────────────────────────────
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.AZURE_VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.AZURE_VM_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      # ── Copy artifacts to the VM ───────────────────────────────────────────
-      - name: Copy artifacts to VM
+      # ── Copiar archivos al servidor ────────────────────────────────────────
+      - name: Copy files to server
         run: |
+          ssh -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "mkdir -p /opt/lab06"
           scp -i ~/.ssh/deploy_key \
-              dummy-a.tar.gz \
-              dummy-b.tar.gz \
+              docker-compose.yml \
               scripts/deploy.sh \
-              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }}:/tmp/
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/lab06/
 
-      # ── Deploy Dummy A ─────────────────────────────────────────────────────
-      - name: Deploy Dummy A (static site)
+      # ── Ejecutar despliegue ────────────────────────────────────────────────
+      - name: Deploy
         run: |
           ssh -i ~/.ssh/deploy_key \
-              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }} \
-              "bash /tmp/deploy.sh dummy-a /tmp/dummy-a.tar.gz"
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
+               GHCR_USER='${{ github.actor }}' \
+               bash /opt/lab06/deploy.sh"
 
-      # ── Deploy Dummy B ─────────────────────────────────────────────────────
-      - name: Deploy Dummy B (Flask API)
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }} \
-              "bash /tmp/deploy.sh dummy-b /tmp/dummy-b.tar.gz"
-
-      # ── Smoke tests from runner ────────────────────────────────────────────
+      # ── Smoke tests desde el runner ────────────────────────────────────────
       - name: Smoke test — Dummy A (port 80)
         run: |
-          curl -sf http://${{ secrets.AZURE_VM_IP }}/ \
+          curl -sf http://${{ secrets.SSH_HOST }}/ \
             | grep -q "Hola Mundo DevOps" \
             && echo "Dummy A: PASS" \
             || { echo "Dummy A: FAIL"; exit 1; }
@@ -73,7 +55,7 @@ jobs:
       - name: Smoke test — Dummy B /health (port 8080)
         run: |
           STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
-            http://${{ secrets.AZURE_VM_IP }}:8080/health)
+            http://${{ secrets.SSH_HOST }}:8080/health)
           [ "$STATUS" = "200" ] \
             && echo "Dummy B: PASS (HTTP $STATUS)" \
             || { echo "Dummy B: FAIL (HTTP $STATUS)"; exit 1; }

@@ -1,31 +1,48 @@
 # Lab 06 — DevOps Moderno con GitHub Actions y Azure DevOps
 
-Implementación de un pipeline CI/CD completo para dos aplicaciones dummy, desplegadas automáticamente en una VM Ubuntu en Azure.
+Pipeline CI/CD completo para dos apps dummy, empaquetadas como imágenes Docker y desplegadas automáticamente en un servidor Linux propio vía SSH.
 
 ## Estructura
 
 ```
-app/dummy-a/      → Sitio estático HTML (NGINX, puerto 80)
-app/dummy-b/      → API Flask con /health (Python, puerto 8080)
-scripts/          → Script de despliegue remoto SSH
-.github/workflows → CI/CD con GitHub Actions
-pipeline/         → Pipelines equivalentes en Azure DevOps
-INFORME.md        → Informe técnico completo
+app/
+  dummy-a/            → Sitio estático HTML (imagen NGINX, puerto 80)
+    Dockerfile
+    index.html
+    nginx.conf
+  dummy-b/            → API Flask con /health (imagen Python, puerto 8080)
+    Dockerfile
+    app.py
+    requirements.txt
+    tests/
+scripts/
+  deploy.sh           → Script de despliegue remoto (docker compose pull + up)
+docker-compose.yml    → Orquestación en el servidor
+.github/workflows/
+  ci.yml              → CI: lint + tests + build + push a ghcr.io
+  cd.yml              → CD: SSH → docker compose up
+pipeline/
+  azure-pipelines-ci.yml
+  azure-pipelines-cd.yml
+INFORME.md
 ```
 
 ## Flujo CI/CD
 
 ```
-git push → CI (lint + tests + package) → CD (SCP → deploy.sh → smoke tests)
+git push → CI (flake8 + pytest + docker build + push ghcr.io)
+         → CD (SSH → docker compose pull → up -d → smoke tests)
 ```
 
 ## Secretos requeridos (GitHub Settings → Secrets)
 
 | Secret | Descripción |
 |---|---|
-| `AZURE_VM_IP` | IP pública de la VM Azure |
-| `AZURE_VM_USER` | Usuario SSH (ej. `ubuntu`) |
-| `AZURE_VM_SSH_KEY` | Clave privada SSH (contenido del `.pem`) |
+| `SSH_HOST` | IP o hostname del servidor |
+| `SSH_USER` | Usuario SSH |
+| `SSH_KEY` | Clave privada SSH (contenido del `.pem`) |
+
+> `GITHUB_TOKEN` se usa automáticamente para autenticar en ghcr.io — no necesita configuración extra.
 
 ## Ejecutar tests localmente
 
@@ -33,6 +50,14 @@ git push → CI (lint + tests + package) → CD (SCP → deploy.sh → smoke tes
 cd app/dummy-b
 pip install -r requirements.txt
 python -m pytest tests/ -v
+```
+
+## Ejecutar con Docker localmente
+
+```bash
+docker compose up --build
+# Dummy A: http://localhost
+# Dummy B: http://localhost:8080/health
 ```
 
 Ver [INFORME.md](INFORME.md) para documentación completa.
