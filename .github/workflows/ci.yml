@@ -1,0 +1,73 @@
+name: CI — Build & Test
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  # ── Dummy A: static site validation ───────────────────────────────────────
+  lint-dummy-a:
+    name: Lint & Package — Dummy A (Static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate HTML syntax
+        run: |
+          sudo apt-get install -y tidy
+          tidy -errors -quiet app/dummy-a/index.html || true
+
+      - name: Package dummy-a
+        run: |
+          tar -czf dummy-a.tar.gz -C app/dummy-a .
+          echo "Artifact size: $(du -sh dummy-a.tar.gz | cut -f1)"
+
+      - name: Upload dummy-a artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dummy-a
+          path: dummy-a.tar.gz
+          retention-days: 7
+
+  # ── Dummy B: Python Flask API ──────────────────────────────────────────────
+  test-dummy-b:
+    name: Lint, Test & Package — Dummy B (Flask API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: app/dummy-b/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd app/dummy-b
+          pip install -r requirements.txt
+
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          flake8 app/dummy-b --max-line-length=100 --statistics
+
+      - name: Run tests
+        run: |
+          cd app/dummy-b
+          python -m pytest tests/ -v --tb=short
+
+      - name: Package dummy-b
+        run: |
+          tar -czf dummy-b.tar.gz -C app/dummy-b .
+          echo "Artifact size: $(du -sh dummy-b.tar.gz | cut -f1)"
+
+      - name: Upload dummy-b artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dummy-b
+          path: dummy-b.tar.gz
+          retention-days: 7

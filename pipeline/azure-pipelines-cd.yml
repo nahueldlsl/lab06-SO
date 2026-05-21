@@ -1,0 +1,93 @@
+trigger: none  # triggered manually or by release pipeline
+
+resources:
+  pipelines:
+    - pipeline: ci
+      source: lab06-CI
+      trigger:
+        branches:
+          include:
+            - main
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  # ── Stage: Deploy ──────────────────────────────────────────────────────────
+  - stage: Deploy
+    displayName: Deploy to Azure VM
+    jobs:
+      - deployment: DeployToVM
+        displayName: Deploy Dummy A & B
+        environment: production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # ── Download artifacts ───────────────────────────────────────
+                - task: DownloadPipelineArtifact@2
+                  inputs:
+                    buildType: specific
+                    project: $(System.TeamProjectId)
+                    definition: $(resources.pipeline.ci.pipelineID)
+                    specificBuildWithTriggering: true
+                    artifactName: dummy-a
+                    targetPath: $(Pipeline.Workspace)/artifacts
+                  displayName: Download dummy-a artifact
+
+                - task: DownloadPipelineArtifact@2
+                  inputs:
+                    buildType: specific
+                    project: $(System.TeamProjectId)
+                    definition: $(resources.pipeline.ci.pipelineID)
+                    specificBuildWithTriggering: true
+                    artifactName: dummy-b
+                    targetPath: $(Pipeline.Workspace)/artifacts
+                  displayName: Download dummy-b artifact
+
+                # ── Configure SSH ────────────────────────────────────────────
+                - task: InstallSSHKey@0
+                  inputs:
+                    knownHostsEntry: $(AZURE_VM_KNOWN_HOSTS)
+                    sshPublicKey: $(AZURE_VM_SSH_PUBLIC_KEY)
+                    sshKeySecureFile: deploy_key.pem
+                  displayName: Install SSH key
+
+                # ── Copy files to VM ─────────────────────────────────────────
+                - script: |
+                    scp -i $(Agent.TempDirectory)/deploy_key.pem \
+                        $(Pipeline.Workspace)/artifacts/dummy-a.tar.gz \
+                        $(Pipeline.Workspace)/artifacts/dummy-b.tar.gz \
+                        scripts/deploy.sh \
+                        $(AZURE_VM_USER)@$(AZURE_VM_IP):/tmp/
+                  displayName: Copy artifacts to VM
+
+                # ── Deploy Dummy A ───────────────────────────────────────────
+                - script: |
+                    ssh -i $(Agent.TempDirectory)/deploy_key.pem \
+                        $(AZURE_VM_USER)@$(AZURE_VM_IP) \
+                        "bash /tmp/deploy.sh dummy-a /tmp/dummy-a.tar.gz"
+                  displayName: Deploy Dummy A
+
+                # ── Deploy Dummy B ───────────────────────────────────────────
+                - script: |
+                    ssh -i $(Agent.TempDirectory)/deploy_key.pem \
+                        $(AZURE_VM_USER)@$(AZURE_VM_IP) \
+                        "bash /tmp/deploy.sh dummy-b /tmp/dummy-b.tar.gz"
+                  displayName: Deploy Dummy B
+
+                # ── Smoke tests ──────────────────────────────────────────────
+                - script: |
+                    curl -sf http://$(AZURE_VM_IP)/ \
+                      | grep -q "Hola Mundo DevOps" \
+                      && echo "Dummy A: PASS" \
+                      || { echo "Dummy A: FAIL"; exit 1; }
+                  displayName: Smoke test — Dummy A
+
+                - script: |
+                    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+                      http://$(AZURE_VM_IP):8080/health)
+                    [ "$STATUS" = "200" ] \
+                      && echo "Dummy B: PASS (HTTP $STATUS)" \
+                      || { echo "Dummy B: FAIL (HTTP $STATUS)"; exit 1; }
+                  displayName: Smoke test — Dummy B

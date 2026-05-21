@@ -1,0 +1,85 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  # ── Stage 1: Build & Test ──────────────────────────────────────────────────
+  - stage: BuildAndTest
+    displayName: Build & Test
+    jobs:
+      # ── Dummy A ─────────────────────────────────────────────────────────────
+      - job: DummyA
+        displayName: Lint & Package — Dummy A (Static)
+        steps:
+          - checkout: self
+
+          - script: |
+              sudo apt-get install -y tidy
+              tidy -errors -quiet app/dummy-a/index.html || true
+            displayName: Validate HTML
+
+          - script: |
+              tar -czf $(Build.ArtifactStagingDirectory)/dummy-a.tar.gz \
+                  -C app/dummy-a .
+            displayName: Package dummy-a
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: $(Build.ArtifactStagingDirectory)
+              artifactName: dummy-a
+            displayName: Publish dummy-a artifact
+
+      # ── Dummy B ─────────────────────────────────────────────────────────────
+      - job: DummyB
+        displayName: Test & Package — Dummy B (Flask API)
+        steps:
+          - checkout: self
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+            displayName: Use Python 3.12
+
+          - script: |
+              cd app/dummy-b
+              pip install -r requirements.txt
+              pip install flake8
+            displayName: Install dependencies
+
+          - script: |
+              flake8 app/dummy-b --max-line-length=100 --statistics
+            displayName: Lint with flake8
+
+          - script: |
+              cd app/dummy-b
+              python -m pytest tests/ -v --tb=short \
+                --junitxml=$(Build.ArtifactStagingDirectory)/test-results.xml
+            displayName: Run tests
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: $(Build.ArtifactStagingDirectory)/test-results.xml
+            condition: always()
+            displayName: Publish test results
+
+          - script: |
+              tar -czf $(Build.ArtifactStagingDirectory)/dummy-b.tar.gz \
+                  -C app/dummy-b .
+            displayName: Package dummy-b
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: $(Build.ArtifactStagingDirectory)
+              artifactName: dummy-b
+            displayName: Publish dummy-b artifact

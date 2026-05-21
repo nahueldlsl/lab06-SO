@@ -1,0 +1,79 @@
+name: CD — Deploy to Azure VM
+
+on:
+  workflow_run:
+    workflows: ["CI — Build & Test"]
+    types: [completed]
+    branches: ["main"]
+
+jobs:
+  deploy:
+    name: Deploy to Ubuntu VM
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Download artifacts produced by CI ─────────────────────────────────
+      - name: Download dummy-a artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dummy-a
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Download dummy-b artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dummy-b
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      # ── Set up SSH key ─────────────────────────────────────────────────────
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AZURE_VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.AZURE_VM_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ── Copy artifacts to the VM ───────────────────────────────────────────
+      - name: Copy artifacts to VM
+        run: |
+          scp -i ~/.ssh/deploy_key \
+              dummy-a.tar.gz \
+              dummy-b.tar.gz \
+              scripts/deploy.sh \
+              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }}:/tmp/
+
+      # ── Deploy Dummy A ─────────────────────────────────────────────────────
+      - name: Deploy Dummy A (static site)
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }} \
+              "bash /tmp/deploy.sh dummy-a /tmp/dummy-a.tar.gz"
+
+      # ── Deploy Dummy B ─────────────────────────────────────────────────────
+      - name: Deploy Dummy B (Flask API)
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }} \
+              "bash /tmp/deploy.sh dummy-b /tmp/dummy-b.tar.gz"
+
+      # ── Smoke tests from runner ────────────────────────────────────────────
+      - name: Smoke test — Dummy A (port 80)
+        run: |
+          curl -sf http://${{ secrets.AZURE_VM_IP }}/ \
+            | grep -q "Hola Mundo DevOps" \
+            && echo "Dummy A: PASS" \
+            || { echo "Dummy A: FAIL"; exit 1; }
+
+      - name: Smoke test — Dummy B /health (port 8080)
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            http://${{ secrets.AZURE_VM_IP }}:8080/health)
+          [ "$STATUS" = "200" ] \
+            && echo "Dummy B: PASS (HTTP $STATUS)" \
+            || { echo "Dummy B: FAIL (HTTP $STATUS)"; exit 1; }
